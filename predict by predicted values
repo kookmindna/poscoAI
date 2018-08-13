@@ -1,0 +1,178 @@
+### Generate data set by stacking
+rm(list=ls())
+setwd("~/Downloads/dataForPosco")
+### pacakges
+library(dplyr)
+library(caret)
+library(data.table)
+library(RcppRoll)
+
+### 66.23
+
+### load data
+posco <- read.csv('total_mice5.csv',stringsAsFactors = FALSE)
+posco %>% head
+posco %>% tail
+posco <- posco %>%
+  mutate(lag_1 = lag(posco$y,1),
+         avg_7 = roll_meanr(posco$y, 7),
+         avg_3 = roll_meanr(posco$y, 3)
+  )
+
+posco$year <- substr(posco$date,1,4) %>% as.numeric()
+posco$month <- substr(posco$date,6,7) %>% as.numeric()
+posco$date <- NULL
+
+## cv option
+cv <- trainControl(method = "repeatedcv", number = 2,repeats = 1)
+
+## param option
+xgb.grid = expand.grid(
+  nrounds = 100,
+  eta = 0.11,
+  gamma = 0.4,
+  max_depth = 3,
+  min_child_weight = 1,
+  colsample_bytree = 1,
+  subsample = 1
+)
+
+
+#### translate data set
+translate <- function(x) {
+  ##  idx
+  totalIdx <- which(posco$year %in% c(2013,2016,2017,2018))
+
+  ## lag_1,2,4,5 del
+  x$lag_1 <- NULL
+  x$lag_2 <- NULL
+  x$lag_4 <- NULL
+  x$lag_5 <- NULL
+  
+  return(x[totalIdx,])
+} # end of function
+
+posco <- translate(posco)
+posco %>% head
+
+## formula
+names(posco)
+ff1 <- avg_7~.
+ff2 <- avg_3~.
+ff3 <- a.bhp~.
+ff4 <- a.rio~.
+ff5 <- a.vale~.
+ff6 <- a.ex_au~.
+ff7 <- a.ex_brazil~.
+ff8 <- a.ex_china~.
+ff9 <- a.wti~.
+ff10 <- a.pmi~.
+ff11 <- a.china_jogang~.
+ff12 <- a.world_jogang~.
+ff13 <- a.flood_au~.
+ff14 <- a.flood_brazil~.
+ff15 <- a.flood_china~.
+ff16 <- a.flood_india~.
+ff17 <- a.iron_steel~.
+ff18 <- a.dis_brazil~.
+ff19 <- a.dis_india~.
+ff20 <- a.dis_au~.
+ff21 <- a.dis_china~.
+ff22 <- a.trade_risk~.
+ff23 <- a.avg_7~.
+ff24 <- a.avg_3~.
+
+## formula var names
+varNames <- vector()
+for (i in 1:24) {
+  varNames[i] <- substr(get(paste("ff",i,sep ="")),1,100)[2]
+}
+
+## Generate null test set
+# x : numRow, y : numCol, z : names vector for col names
+GenTest <- function(x,y,z) {
+  tmpTest <- matrix(rep(0,x*y),x,y)
+  tmpTest <- as.data.frame(tmpTest)
+  names(tmpTest) <- z
+  return(tmpTest)
+}
+zeroTest <- GenTest(3,length(varNames),varNames)
+
+## x : train set, y : test set, z : Number of variables
+GenpredTestx <- function(x,y,z) {
+  Time1 <- Sys.time()
+  cnt <- 1
+  # train, test 변수명 확인
+  if (sum(names(x) == names(y)) == ((length(names(x)) + length(names(y)))/2)) {
+    while(TRUE) {  
+      ## break while
+      if (cnt == (nrow(y)+1)) {
+        break
+      }
+      
+      cat('################## predict ', cnt, 'weeks.. ##################','\n')
+      ## predict each variables
+      for (j in 1:z) {
+        tmpX <- x
+        tmpX[,j] <- lead(tmpX[,j],1)
+        submit.xgb <- train(get(paste("ff",j,sep="")), data = tmpX[1:(nrow(tmpX)-1),], method = "xgbTree", trControl = cv, tuneGrid = xgb.grid)
+        pred.xgb.submit <- predict(submit.xgb,tmpX[nrow(tmpX),])
+        cat('------------------------','\n',names(x)[j],'rsq : ',submit.xgb$results$Rsquared,'\n','------------------------','\n')
+        y[cnt,j] <- pred.xgb.submit
+      } # end of for
+      x <- rbind(x,y[cnt,])
+      cnt <- cnt + 1
+    } # end of while
+  } else {
+    print("train과 test의 변수명을 동일하게 맞춰주세요 ")
+  }
+  y$year <- 2018
+  y$month <- 8
+  Time2 <- Sys.time()
+  cat(' Finish!! total elapsed time : ',Time2-Time1,'\n')
+  return(y)
+} # end of function
+
+trainD <- posco[1:(nrow(posco)-3),names(posco) %in% c(varNames,"year","month","y")]
+testD <- posco[(nrow(posco)-2):nrow(posco),names(posco) %in% c(varNames,"year","month","y")]
+
+final_tmp <- GenpredTestx(trainD,zeroTest,length(varNames))
+
+## for final
+#final_test <- GenpredTestx(posco[names(posco) %in% varNames],zeroTest,length(varNames))
+
+### variables for train
+var_f <- c(varNames,"year","month","y","lag_1")
+
+### add lag_1
+final_tmp$lag_1 <- 0
+final_tmp$lag_1[1] <- posco$y[length(posco$y)]
+
+## real lag
+realLag <- function(x,y) {
+  ansy <- x$y
+  cnt <- 1
+  while(TRUE) {
+    if (min(y$lag_1) != 0) {
+      break
+    }
+    if (cnt == 1) {
+      submit.xgb1 <- train(y~., data = x, method = "xgbTree", trControl = cv, tuneGrid = xgb.grid)
+      y$lag_1[2] <- predict(submit.xgb1,y[1,])
+      ansy[length(ansy)+1] <- predict(submit.xgb1,y[1,])
+      cnt <- cnt+1
+    } else {
+      for (i in 2:(nrow(y)-1)) {
+        tmpX <- rbind(x[!names(x) %in% "y"],y[1:(i-1),])
+        tmpX$y <- ansy
+        submit.xgb1 <- train(y~., data = tmpX, method = "xgbTree", trControl = cv, tuneGrid = xgb.grid)
+        ansy[length(ansy)+1] <- predict(submit.xgb1,y[i,])
+        y$lag_1[i+1] <- predict(submit.xgb1,y[i,])
+      }
+    } # end of if else
+  } # end of while
+
+  return(y)
+}
+
+final_test <- realLag(posco[var_f],final_tmp)

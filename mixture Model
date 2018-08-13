@@ -1,0 +1,62 @@
+### mixture model
+## a : variables list ,b : train data, c : test data, d : formula, x : model, tunegrid list, y : ratio, z : rep option
+mixtureModel <- function(a,b,c,d,x,y,z) {
+  Time1 <- Sys.time()
+  for (i in 1:length(x)) {
+    assign(paste('tmp.',x[[i]][1],sep=""), rep(0,nrow(c)))
+  }
+  for (i in 1:length(x)) {
+    if (z[i] == 1) {
+      cat('model :', x[[i]][1],'\n')
+      assign(paste('model.',x[[i]][1],sep=""), train(d, data = b[a[[i]]], method = x[[i]][1], trControl = cv, tuneGrid = get(x[[i]][2])))
+      assign(paste('pred.',x[[i]][1],sep=""),predict(get(paste('model.',x[[i]][1],sep="")),c))
+    } else {
+      for (j in 1:z[i]) {
+        cat('model :', x[[i]][1], 'cnt', j, '\n')
+        assign(paste('model.',x[[i]][1],sep=""), train(d, data = b[a[[i]]], method = x[[i]][1], trControl = cv, tuneGrid = get(x[[i]][2])))
+        assign(paste('pred.',x[[i]][1],sep=""),predict(get(paste('model.',x[[i]][1],sep="")),c))
+        assign(paste('tmp.',x[[i]][1],sep=""), get(paste('tmp.',x[[i]][1],sep="")) + get(paste('pred.',x[[i]][1],sep="")))
+      } # end of for j
+    assign(paste('pred.',x[[i]][1],sep=""),get(paste('tmp.',x[[i]][1],sep=""))/z[i])
+    } # end of if
+  } # end of for i
+  final_pred <- rep(0,nrow(c))
+  for (i in 1:length(x)) {
+    assign(paste('final_pred',i,sep = ""),get(paste('pred.',x[[i]][1],sep=""))*y[i])
+    final_pred <- final_pred + get(paste('final_pred',i,sep = ""))
+  }
+  Time2 <- Sys.time()
+  cat(' Finish!! total elapsed time : ',Time2-Time1,'\n')
+  return(final_pred)
+} # end of fucntion
+
+## set grid
+{rf.grid <- expand.grid(
+  .mtry = 137
+)
+
+xgb.grid = expand.grid(
+  nrounds = 100,
+  eta = 0.11,
+  gamma = 0.4,
+  max_depth = 3,
+  min_child_weight = 1,
+  colsample_bytree = 1,
+  subsample = 1
+)
+
+gbm.grid <- expand.grid(
+  n.trees = 200,
+  interaction.depth = 3,
+  shrinkage = 0.1,
+  n.minobsinnode = 3
+)
+}
+
+Vset <- list(varList,names(train),names(train))
+Mset <- list(c('xgbTree',"xgb.grid"),
+             c('rf','rf.grid'),
+             c('gbm','gbm.grid'))
+Mratio <- c(0.4,0.3,0.3)
+rep_Model <- c(1,5,5)
+mixturePred <- mixtureModel(Vset, train, test,ff, Mset, Mratio, rep_Model)

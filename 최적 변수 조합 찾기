@@ -1,0 +1,63 @@
+###
+rm(list=ls())
+### setwd
+setwd("~/Downloads/dataForPosco")
+### pacakges
+library(dplyr)
+library(caret)
+library(data.table)
+library(MASS)
+
+### load data
+data_total <- read.csv('selectyear_naformer.csv',stringsAsFactors = FALSE)
+data_total$lag_1 <- NULL
+data_total$lag_2 <- NULL
+data_total$lag_4 <- NULL
+data_total$lag_5 <- NULL
+
+data_total$year <- substr(data_total$date,1,4)
+data_total$month <- substr(data_total$date,6,7)
+data_total$date <- NULL
+data_total$year <- as.factor(data_total$year)
+data_total$month <- as.factor(data_total$month)
+
+### data partition
+train <- data_total[1:(nrow(data_total)-5),]
+test <- data_total[(nrow(data_total)-4):nrow(data_total),]
+
+## cv option
+cv <- trainControl(method = "repeatedcv", number = 2,repeats = 1)
+## param option
+xgb.grid = expand.grid(
+  nrounds = 100,
+  eta = 0.11,
+  gamma = 0.4,
+  max_depth = 3,
+  min_child_weight = 1,
+  colsample_bytree = 1,
+  subsample = 1
+)
+
+### for best features
+rmse <- vector()
+varList <- vector()
+# totVar <- list()
+
+ff <- lag_3~.
+## a : target variables(numeric), b : formula, x : train data, y : test data, z : time
+bestFeatures <- function(a,b,x,y,z) {
+  Time1 <- Sys.time()
+  for (i in 1:z) {
+    print(i)
+    colIdx <- c(a,sample(ncol(x),ncol(x),replace = T))
+    submit.xgb <- train(b, data = x[unique(colIdx)], method = "xgbTree", trControl = cv, tuneGrid = xgb.grid)
+    rmse[i] <<- RMSE(predict(submit.xgb,y[unique(colIdx)]),y[,a])
+    if (rmse[i] == min(rmse)) {
+      varList <<- unique(colIdx)
+    }
+  } # end of for
+  Time2 <- Sys.time()
+  cat(' Finish!! total elapsed time : ',Time2-Time1,'\n')
+  cat('best features',which(rmse == min(rmse)))
+}
+bestFeatures(which(names(data_total) == "lag_3"),ff,train,test,1000)
